@@ -1292,10 +1292,42 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	int rc = -1;
 	uint32_t lo_freq = freq + priv->int_freq;
 	uint8_t air_cable1_in;
+	uint32_t margin = 1e6 + priv->bw/2;
 
 	rc = r82xx_set_mux(priv, lo_freq);
 	if (rc < 0)
 		goto err;
+
+#define PLL_LOW 26.7e6
+#define PLL_HIGH 1850e6
+
+	/*
+	 * Keep PLL within empirically stable bounds; outside those bounds,
+	 * we prefer to tune to the "wrong" frequency; the difference will be
+	 * mopped up by the 2832 downconverter.
+	 *
+	 * Beware that outside the stable range, the PLL can claim to be locked
+	 * while it is actually stuck at a different frequency (e.g. sometimes
+	 * it can claim to get PLL lock when configured anywhere between 24 and
+	 * 26MHz, but it actually always locks to 26.6-ish).
+	 *
+	 * Make sure to keep the LO away from tuned frequency as there seems
+	 * to be a ~600kHz high-pass filter in the IF path, so you don't want
+	 * any interesting frequencies to land near the IF.
+	 */
+	if (lo_freq < PLL_LOW) {
+		if (freq > (PLL_LOW-margin) && freq < (PLL_LOW+margin)) {
+			lo_freq = freq + margin;
+		} else {
+			lo_freq = PLL_LOW;
+		}
+	} else if (lo_freq > PLL_HIGH) {
+		if (freq > (PLL_HIGH-margin) && freq < (PLL_HIGH+margin)) {
+			lo_freq = freq - margin;
+		} else {
+			lo_freq = PLL_HIGH;
+		}
+	}
 
 	rc = r82xx_set_pll(priv, lo_freq);
 	if (rc < 0 || !priv->has_lock)
